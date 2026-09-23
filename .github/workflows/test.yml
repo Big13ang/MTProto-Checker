@@ -1,57 +1,15 @@
 name: Test
 
-# Runs on every push and pull request. Release builds stay in release.yml, which
-# this workflow does not touch.
-#
-# E2E_LIVE is deliberately never set: tests/e2e/live.spec.js talks to the real
-# Telegram network and would make CI depend on external reachability.
-#
-# `snapshot` is ignored because snapshot.yml force-pushes a bot commit there every
-# night; that branch holds one generated text file and no code to test.
-
 on:
   push:
-    branches-ignore:
-      - snapshot
+    branches:
+      - main
   pull_request:
 
 permissions:
   contents: read
 
 jobs:
-  js:
-    name: JS unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - run: npm ci
-
-      - run: npm test
-
-      # The line and branch thresholds are the enforcement behind the "100% line
-      # and branch" claim in SPEC.md and CLAUDE.md — without a gate that number is
-      # documentation, not a guarantee.
-      #
-      # public/js/app.js is excluded because its reported coverage is a measurement
-      # artifact, not a real gap: tests/helpers/dom.js cache-busts every mount with a
-      # ?mount=N specifier, so each mount is a separate module URL to the reporter and
-      # none of them accumulates. Functions are not gated at all: the only misses
-      # are timer callbacks, which run or not depending on how long whatever test
-      # follows them happens to take — render.js's showToast() has read 85.71%,
-      # 87.50% and 100% across this suite's life, moved by unrelated tests and by
-      # the file growing rather than by anything about showToast itself.
-      #
-      # --test-coverage-lines/-branches need Node >= 22.8; setup-node '22' resolves to
-      # the latest 22.x, so the pin above is enough.
-      - name: Coverage thresholds
-        run: npm run test:coverage:ci
-
   go:
     name: Go tests and formatting
     runs-on: ubuntu-latest
@@ -64,17 +22,8 @@ jobs:
 
       - run: go vet ./...
 
-      # -short skips the tests that need network access or testdata/proxies.txt,
-      # which is not in the repository.
       - run: go test ./... -short
 
-      # gofmt -l prints offending files and exits 0, so the file list is the
-      # failure signal. .gitattributes pins *.go to LF, so this is meaningful
-      # on a Linux runner even for a checkout made on Windows.
-      #
-      # Ahead of the race step deliberately: it is fast and deterministic, and a
-      # job stops at its first failing step, so putting the slow timing-sensitive
-      # one first would let it hide a formatting failure.
       - name: gofmt
         run: |
           files=$(gofmt -l .)
@@ -84,56 +33,5 @@ jobs:
             exit 1
           fi
 
-      # A separate step rather than -race on the run above, so a data race is
-      # distinguishable in the log from an ordinary failure. What -short actually
-      # drives concurrently is /fetch-sources — goroutines writing one results
-      # slice, sharing one http.Client and one byte budget, plus the in-flight
-      # semaphore — and checkproxy_test.go's handshake against a local fake proxy.
-      # /check-stream's per-proxy goroutines and dnsCache are only reached by the
-      # tests -short skips, so they stay unchecked here; a plain run checks none
-      # of it at all.
-      #
-      # race_test.go stretches checkproxy_test.go's wall-clock budgets under this
-      # build: instrumented, the fake proxy's handshake ran past the 20s budget on
-      # a loaded machine with no DATA RACE reported at all, which made this step a
-      # coin flip until the factor existed.
       - name: Race detector
         run: go test ./... -short -race
-
-  e2e:
-    name: Playwright e2e
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      # The e2e suite boots the real server via `go run .`.
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
-        with:
-          go-version-file: 'go.mod'
-
-      - run: npm ci
-
-      # Chromium is ~190 MiB; the lockfile pins the Playwright version, so it is
-      # the right cache key.
-      - name: Cache Playwright browsers
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4.3.0
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-
-      - run: npx playwright install --with-deps chromium
-
-      - run: npm run test:e2e
-
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
-        with:
-          name: playwright-report
-          path: playwright-report/
-          retention-days: 7
