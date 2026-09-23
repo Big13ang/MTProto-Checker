@@ -9,6 +9,7 @@ import (
 
 type dnsCacheEntry struct {
 	ips  []net.IP
+	err  error
 	next time.Time
 }
 
@@ -18,13 +19,14 @@ var (
 )
 
 // CachedLookupHost resolves a hostname with a 5-minute cache to avoid
-// repeated DNS lookups for the same proxy host.
+// repeated DNS lookups for the same proxy host, and caches negative lookups
+// for 1 minute to avoid repeating failed lookups.
 func CachedLookupHost(host string) ([]net.IP, error) {
 	dnsCacheMu.RLock()
 	entry, ok := dnsCache[host]
 	dnsCacheMu.RUnlock()
 	if ok && time.Now().Before(entry.next) {
-		return entry.ips, nil
+		return entry.ips, entry.err
 	}
 
 	if ip := net.ParseIP(host); ip != nil {
@@ -36,6 +38,9 @@ func CachedLookupHost(host string) ([]net.IP, error) {
 	var resolver net.Resolver
 	ipAddrs, err := resolver.LookupIPAddr(dnsCtx, host)
 	if err != nil {
+		dnsCacheMu.Lock()
+		dnsCache[host] = &dnsCacheEntry{err: err, next: time.Now().Add(1 * time.Minute)}
+		dnsCacheMu.Unlock()
 		return nil, err
 	}
 	ips := make([]net.IP, len(ipAddrs))

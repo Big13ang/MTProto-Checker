@@ -60,6 +60,9 @@ func DecodeSecret(s string) ([]byte, error) {
 // TCPCheck performs a fast TCP connectivity check to server:port with DNS
 // caching. It returns nil if a TCP connection can be established.
 func TCPCheck(server string, port int) error {
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("invalid port: %d", port)
+	}
 	ips, err := CachedLookupHost(server)
 	if err != nil {
 		return err
@@ -69,9 +72,16 @@ func TCPCheck(server string, port int) error {
 		targetHost = ips[0].String()
 	}
 	addr := net.JoinHostPort(targetHost, fmt.Sprintf("%d", port))
-	conn, err := net.DialTimeout("tcp", addr, tcpTimeout)
+	dialer := net.Dialer{
+		Timeout:   tcpTimeout,
+		KeepAlive: -1,
+	}
+	conn, err := dialer.DialContext(context.Background(), "tcp", addr)
 	if err != nil {
 		return err
+	}
+	if tcpConn, ok := conn.(*net.TCPConn); ok {
+		_ = tcpConn.SetLinger(0)
 	}
 	conn.Close()
 	return nil
@@ -87,6 +97,10 @@ func CheckProxy(ctx context.Context, server string, port int, secret string, tim
 			log.Printf("PANIC in CheckProxy %s:%d: %v\n%s", server, port, r, debug.Stack())
 		}
 	}()
+
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("invalid port: %d", port)
+	}
 
 	decodedSecret, err := DecodeSecret(secret)
 	if err != nil {

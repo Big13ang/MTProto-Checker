@@ -253,7 +253,12 @@ func NewMux(version string) *http.ServeMux {
 
 		sendEvent("progress", &strProgress{Completed: 0, Total: total, Working: 0})
 
-		sem := make(chan struct{}, limit)
+		tcpLimit := limit * 2
+		if tcpLimit > 100 {
+			tcpLimit = 100
+		}
+		tcpSem := make(chan struct{}, tcpLimit)
+		telegramSem := make(chan struct{}, limit)
 		var mu sync.Mutex
 		var wg sync.WaitGroup
 
@@ -264,8 +269,6 @@ func NewMux(version string) *http.ServeMux {
 			wg.Add(1)
 			go func(proxy CheckRequest) {
 				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
 
 				t := proxy.Timeout
 				if t < checker.MinTimeout || t > checker.MaxTimeout {
@@ -284,7 +287,10 @@ func NewMux(version string) *http.ServeMux {
 					return
 				}
 
+				tcpSem <- struct{}{}
 				err := checker.TCPCheck(proxy.Server, proxy.Port)
+				<-tcpSem
+
 				if err != nil {
 					mu.Lock()
 					completed++
@@ -296,6 +302,9 @@ func NewMux(version string) *http.ServeMux {
 					mu.Unlock()
 					return
 				}
+
+				telegramSem <- struct{}{}
+				defer func() { <-telegramSem }()
 
 				hardCtx, hardCancel := context.WithTimeout(r.Context(), time.Duration(t+10)*time.Second)
 				defer hardCancel()
