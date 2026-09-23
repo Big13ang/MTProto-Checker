@@ -60,11 +60,15 @@ func DecodeSecret(s string) ([]byte, error) {
 // TCPCheck performs a fast TCP connectivity check to server:port with DNS
 // caching. It returns nil if a TCP connection can be established.
 func TCPCheck(server string, port int) error {
-	_, err := CachedLookupHost(server)
+	ips, err := CachedLookupHost(server)
 	if err != nil {
 		return err
 	}
-	addr := net.JoinHostPort(server, fmt.Sprintf("%d", port))
+	targetHost := server
+	if len(ips) > 0 {
+		targetHost = ips[0].String()
+	}
+	addr := net.JoinHostPort(targetHost, fmt.Sprintf("%d", port))
 	conn, err := net.DialTimeout("tcp", addr, tcpTimeout)
 	if err != nil {
 		return err
@@ -84,12 +88,16 @@ func CheckProxy(ctx context.Context, server string, port int, secret string, tim
 		}
 	}()
 
-	addr := net.JoinHostPort(server, fmt.Sprintf("%d", port))
-
 	decodedSecret, err := DecodeSecret(secret)
 	if err != nil {
 		return 0, errors.Wrap(err, "decode secret")
 	}
+
+	targetHost := server
+	if ips, err := CachedLookupHost(server); err == nil && len(ips) > 0 {
+		targetHost = ips[0].String()
+	}
+	addr := net.JoinHostPort(targetHost, fmt.Sprintf("%d", port))
 
 	resolver, err := dcs.MTProxy(addr, decodedSecret, dcs.MTProxyOptions{})
 	if err != nil {

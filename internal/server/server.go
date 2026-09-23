@@ -134,7 +134,11 @@ func NewMux(version string) *http.ServeMux {
 		var reachable []indexedReq
 		var reachableMu sync.Mutex
 		var tcpWg sync.WaitGroup
-		tcpSem := make(chan struct{}, limit)
+		tcpLimit := limit * 2
+		if tcpLimit > 100 {
+			tcpLimit = 100
+		}
+		tcpSem := make(chan struct{}, tcpLimit)
 
 		for i, p := range reqs {
 			tcpWg.Add(1)
@@ -142,6 +146,11 @@ func NewMux(version string) *http.ServeMux {
 				defer tcpWg.Done()
 				tcpSem <- struct{}{}
 				defer func() { <-tcpSem }()
+
+				if _, err := checker.DecodeSecret(proxy.Secret); err != nil {
+					results[idx] = CheckResponse{OK: false}
+					return
+				}
 
 				if err := checker.TCPCheck(proxy.Server, proxy.Port); err != nil {
 					results[idx] = CheckResponse{OK: false}
@@ -261,6 +270,18 @@ func NewMux(version string) *http.ServeMux {
 				t := proxy.Timeout
 				if t < checker.MinTimeout || t > checker.MaxTimeout {
 					t = timeout
+				}
+
+				if _, err := checker.DecodeSecret(proxy.Secret); err != nil {
+					mu.Lock()
+					completed++
+					sendEvent("progress", &strProgress{
+						Completed: completed, Total: total, Working: working,
+						Server: proxy.Server, Port: proxy.Port, Secret: proxy.Secret,
+						OK: false,
+					})
+					mu.Unlock()
+					return
 				}
 
 				err := checker.TCPCheck(proxy.Server, proxy.Port)

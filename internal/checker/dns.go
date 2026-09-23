@@ -27,6 +27,10 @@ func CachedLookupHost(host string) ([]net.IP, error) {
 		return entry.ips, nil
 	}
 
+	if ip := net.ParseIP(host); ip != nil {
+		return []net.IP{ip}, nil
+	}
+
 	dnsCtx, dnsCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer dnsCancel()
 	var resolver net.Resolver
